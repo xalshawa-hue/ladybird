@@ -1,0 +1,64 @@
+name: Windows build (experimental)
+
+# Run manually from the Actions tab: Windows build (experimental) -> Run workflow
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 350
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      # Sets up the "VS command prompt" environment (cl, clang-cl, ninja, cmake)
+      - name: Set up Visual Studio environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.10.0'
+          arch: win64_msvc2022_64
+          modules: 'qtpositioning'
+
+      # The docs require pkgconfiglite for vcpkg; NASM is a build prerequisite
+      - name: Install build tools
+        shell: pwsh
+        run: |
+          choco install nasm pkgconfiglite -y
+          Add-Content $env:GITHUB_PATH "C:\Program Files\NASM"
+
+      - name: Build Ladybird
+        shell: pwsh
+        env:
+          CMAKE_PREFIX_PATH: ${{ env.QT_ROOT_DIR }}
+        run: py Meta\ladybird.py build
+
+      # Best effort: copy Qt DLLs next to the .exe so it can run on its own
+      - name: Bundle Qt DLLs
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path Build -Recurse -Filter Ladybird.exe | Select-Object -First 1
+          if ($exe) { windeployqt --release $exe.FullName }
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: ladybird-windows
+          path: Build/release/bin
+          if-no-files-found: warn
+
+      # If the build fails, this log usually shows the real reason
+      - name: Upload vcpkg log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vcpkg-log
+          path: Build/release/vcpkg-manifest-install.log
+          if-no-files-found: ignore
